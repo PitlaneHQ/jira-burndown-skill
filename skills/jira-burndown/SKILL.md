@@ -4,7 +4,7 @@ description: Jira burn-down and batch execution skill — iterates through issue
 ---
 # Jira Burn Down Skill
 
-You are a Jira-powered development agent. You pull issues from a Jira board, implement them one by one, verify each with automated checks and code review, then produce a session report. You operate in two modes: **burn-down** (continuous) and **batch** (5 at a time with pause).
+You are a Jira-powered development agent. You pull issues from a Jira board, implement them, verify each with automated checks and code review, then produce a session report. You operate in three modes: **burn-down** (continuous), **batch** (5 at a time with pause), and **parallel** (concurrent agents for independent issues).
 
 ## Setup
 
@@ -141,6 +141,65 @@ Trigger phrases: "do a batch", "work through 5 issues", "batch mode", or invoked
 
 ### Notes
 - Any systemic issues, patterns, or recommendations.
+```
+
+## Parallel Execution
+
+All three modes support parallel execution when issues are independent. This is the default behaviour — sequential is the fallback when conflicts are detected.
+
+### Dependency Analysis
+
+Before dispatching work, analyze the current set of issues (all remaining for burn-down, the next 5 for batch) for conflicts:
+
+**An issue is BLOCKED from parallel execution if any of these are true:**
+1. **Jira link dependency** — it has a "blocks" / "is blocked by" link to another issue in the set
+2. **Same file overlap** — its description, summary, or acceptance criteria reference the same file, component, or API route as another issue in the set (e.g. two issues both touching `/api/invoices` or `Invoice` model)
+3. **Schema conflict** — two or more issues require changes to the same database model or migration
+4. **Sequential dependency** — the issue's description says "after X is done" or references another issue key in the set
+
+**An issue is SAFE for parallel execution if:**
+- It touches different files/components/routes than all other issues in the set
+- It has no Jira link dependencies on other issues in the set
+- It does not modify shared config, schema, or global state that another issue also modifies
+
+### Dispatch Strategy
+
+1. **Analyze** — Categorize all issues in the current set as `parallel-safe` or `sequential-required`.
+2. **Group** — Form parallel waves of independent issues (max 3 concurrent agents per wave to avoid merge conflicts and resource strain).
+3. **Present plan** — Show the user the grouping before executing:
+   ```
+   Wave 1 (parallel): PROJ-12 (fix login), PROJ-15 (add badge), PROJ-18 (update footer)
+   Wave 2 (parallel): PROJ-20 (new report), PROJ-22 (fix search)
+   Wave 3 (sequential): PROJ-25 (schema migration — touches same model as PROJ-20)
+   ```
+4. **Execute waves** — For each wave:
+   - **Parallel wave:** Spawn one agent per issue using git worktrees for isolation. Each agent independently runs: pre-change checklist → implement → lint/typecheck/test. After all agents in the wave complete, run a code-reviewer agent on the combined diff. Merge worktree branches sequentially (rebase to avoid conflicts).
+   - **Sequential wave:** Work through issues one at a time as in standard burn-down/batch mode.
+5. **Verify merge** — After merging a parallel wave, run lint + typecheck + tests on the combined result to catch integration issues.
+6. **Transition** — Mark all completed issues as "Done" in Jira.
+
+### Parallel Agent Instructions
+
+Each parallel agent receives:
+- The issue key, summary, and full description
+- The pre-change checklist and post-change verification requirements
+- Instruction to work in its own git worktree branch (`jira/{issue-key}`)
+- Instruction to commit atomically — one commit per issue with the issue key in the message
+
+### Fallback to Sequential
+
+If dependency analysis is uncertain (e.g. vague issue descriptions that could overlap), **default to sequential**. It is better to be slower than to create merge conflicts. Ask the user if unsure: "PROJ-12 and PROJ-15 might both touch the auth flow — run them in parallel or sequential?"
+
+### Reports (parallel additions)
+
+Parallel execution adds an `Execution` column to reports:
+
+```
+| Key | Summary | Type | Files Changed | Verified | Execution |
+|-----|---------|------|---------------|----------|-----------|
+| PROJ-12 | Fix login | Bug | auth.ts | Yes | Wave 1 (parallel) |
+| PROJ-15 | Add badge | Feature | Badge.tsx | Yes | Wave 1 (parallel) |
+| PROJ-25 | Migration | Task | schema.prisma | Yes | Wave 3 (sequential) |
 ```
 
 ## Issue Management (general)

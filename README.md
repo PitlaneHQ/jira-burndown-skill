@@ -27,7 +27,7 @@ To find your Cloud ID, run:
 curl -s https://yoursite.atlassian.net/_edge/tenant_info | jq .cloudId
 ```
 
-## Two Modes
+## Three Modes
 
 ### Burn Down (continuous)
 
@@ -40,6 +40,24 @@ Works through the entire backlog non-stop until all issues are done or you say s
 Works through 5 issues, produces a batch report, then pauses and waits for your go-ahead before the next 5. Final summary when you're done.
 
 **Trigger:** Say "do a batch", "work through 5 issues", or "batch mode".
+
+### Parallel Execution (automatic)
+
+Both modes automatically detect independent issues and run them in parallel using git worktrees. Issues are grouped into waves (max 3 concurrent agents per wave) based on dependency analysis.
+
+**How it decides:**
+- Checks Jira link dependencies ("blocks" / "is blocked by")
+- Detects same-file overlap from issue descriptions (e.g. two issues touching the same API route)
+- Flags schema conflicts (two issues modifying the same database model)
+- Falls back to sequential when uncertain — asks you if ambiguous
+
+```
+Wave 1 (parallel): PROJ-12 (fix login), PROJ-15 (add badge), PROJ-18 (update footer)
+Wave 2 (parallel): PROJ-20 (new report), PROJ-22 (fix search)
+Wave 3 (sequential): PROJ-25 (schema migration — depends on PROJ-20)
+```
+
+Each parallel agent works in its own git worktree branch. After a wave completes, branches are merged and verified before the next wave starts.
 
 ## What It Does (per issue)
 
